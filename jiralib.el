@@ -335,7 +335,7 @@ request.el, so if at all possible, it should be avoided."
       ('getIssueTypesByProject
        (let ((response (jiralib--rest-call-it (format "/rest/api/2/project/%s" (first params)))))
          (cl-coerce (cdr (assoc 'issueTypes response)) 'list)))
-      ('getUser (jiralib--rest-call-it "/rest/api/2/user" :params `((accountId . ,(first params)))))
+      ('getUser (jiralib--rest-call-it "/rest/api/2/user" :params `((username . ,(first params)))))
       ('getVersions (jiralib--rest-call-it (format "/rest/api/2/project/%s/versions" (first params))))
 
       ;; Worklog calls
@@ -907,7 +907,7 @@ Return nil if the field is not found"
     "Return the account-id (accountId) of the user with FULL-NAME (displayName) in PROJECT."
   (cl-loop for user in (jiralib-get-users project)
         when (rassoc full-name user)
-        return (cdr (assoc 'accountId user))))
+        return (cdr (assoc 'name user))))
 
 (defun jiralib-get-filter (filter-id)
   "Return a filter given its FILTER-ID."
