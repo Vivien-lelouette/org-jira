@@ -318,6 +318,12 @@ See `org-default-priority' for more info."
   :group 'org-jira
   :type 'boolean)
 
+(defcustom org-jira-custom-fields
+  '()
+  "List of custom fields"
+  :group 'org-jira
+  :type 'list)
+
 (defvar org-jira-serv nil
   "Parameters of the currently selected blog.")
 
@@ -1123,7 +1129,7 @@ ORG-JIRA-PROJ-KEY-OVERRIDE being set before and after running."
                       (when (or (and val (not (string= val "")))
                                 (eq entry 'assignee)) ;; Always show assignee
                         (org-jira-entry-put (point) (symbol-name entry) val))))
-                  '(assignee filename reporter type type-id priority labels resolution status components created updated))
+                  (append '(assignee filename reporter type type-id priority labels resolution status components created updated) org-jira-custom-fields))
 
             (org-jira-entry-put (point) "ID" issue-id)
             (org-jira-entry-put (point) "CUSTOM_ID" issue-id)
