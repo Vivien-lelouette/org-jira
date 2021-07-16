@@ -610,8 +610,9 @@ it isn't already on."
   (seq-filter (lambda (elt) (> (length elt) 2)) org-jira-custom-fields))
 
 (defun org-jira-get-custom-fields-to-update ()
-  (cl-loop for custom-field in (org-jira-get-updatable-custom-fields)
-           collect (cons (car (cdr custom-field)) (funcall (car (cdr (cdr custom-field))) (org-jira-get-issue-val-from-org (car custom-field))))))
+  (remove nil 
+          (cl-loop for custom-field in (org-jira-get-updatable-custom-fields)
+                   collect (funcall (car (cdr (cdr custom-field))) (org-jira-get-issue-val-from-org (car custom-field))))))
 
 (defun org-jira--get-project-file-name (project-key)
   "Translate PROJECT-KEY into filename."
