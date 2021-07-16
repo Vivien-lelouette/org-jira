@@ -320,7 +320,7 @@ See `org-default-priority' for more info."
 
 (defcustom org-jira-custom-fields
   '()
-  "List of custom fields"
+  "List of custom fields in the following format '((org-name jira-name (custom-lambda-update-jira-map-function)))"
   :group 'org-jira
   :type 'list)
 
@@ -547,7 +547,8 @@ See `org-default-priority' for more info."
     ;(define-key org-jira-map (kbd "C-c isr") 'org-jira-set-issue-reporter)
     (define-key org-jira-map (kbd "C-c ir") 'org-jira-refresh-issue)
     (define-key org-jira-map (kbd "C-c iR") 'org-jira-refresh-issues-in-buffer)
-    (define-key org-jira-map (kbd "C-c ic") 'org-jira-create-issue)
+    (define-key org-jira-map (kbd "C-c ic") 'org-jira-create-issue-from-org)
+    (define-key org-jira-map (kbd "C-c iC") 'org-jira-create-issue)
     (define-key org-jira-map (kbd "C-c ik") 'org-jira-copy-current-issue-key)
     (define-key org-jira-map (kbd "C-c sc") 'org-jira-create-subtask)
     (define-key org-jira-map (kbd "C-c sg") 'org-jira-get-subtasks)
@@ -604,6 +605,13 @@ it isn't already on."
           (setq l (cdr (assoc key l)))
         (setq l (or (cdr (assoc key l)) l))))
     l))
+
+(defun org-jira-get-updatable-custom-fields ()
+  (seq-filter (lambda (elt) (> (length elt) 2)) org-jira-custom-fields))
+
+(defun org-jira-get-custom-fields-to-update ()
+  (cl-loop for custom-field in (org-jira-get-updatable-custom-fields)
+           collect (cons (car (cdr custom-field)) (funcall (car (cdr (cdr custom-field))) (org-jira-get-issue-val-from-org (car custom-field))))))
 
 (defun org-jira--get-project-file-name (project-key)
   "Translate PROJECT-KEY into filename."
@@ -1129,7 +1137,7 @@ ORG-JIRA-PROJ-KEY-OVERRIDE being set before and after running."
                       (when (or (and val (not (string= val "")))
                                 (eq entry 'assignee)) ;; Always show assignee
                         (org-jira-entry-put (point) (symbol-name entry) val))))
-                  (append '(assignee filename reporter type type-id priority labels resolution status components created updated) org-jira-custom-fields))
+                  (append '(assignee filename reporter type type-id priority labels resolution status components created updated) (mapcar 'car org-jira-custom-fields)))
 
             (org-jira-entry-put (point) "ID" issue-id)
             (org-jira-entry-put (point) "CUSTOM_ID" issue-id)
@@ -1786,6 +1794,56 @@ that should be bound to an issue."
              (assignee (accountId . ,(or (cdr (assoc user jira-users)) nil)))))))
     ticket-struct))
 
+(defun org-jira-get-issue-struct-with-assignee (project type summary description assignee priority &optional parent-id)
+  "Create an issue struct for PROJECT, of TYPE, with SUMMARY and DESCRIPTION."
+  (if (or (equal project "")
+          (equal type "")
+          (equal summary ""))
+      (error "Must provide all information!"))
+  (let* ((project-components (jiralib-get-components project))
+         (jira-users (org-jira-get-assignable-users project))
+         (user assignee)
+         (priority (car (rassoc priority (jiralib-get-priorities))))
+         (ticket-struct
+          `((fields
+             (project (key . ,project))
+             (parent (key . ,parent-id))
+             (issuetype (id . ,(car (rassoc type (if (and (boundp 'parent-id) parent-id)
+                                                     (jiralib-get-subtask-types)
+                                                   (jiralib-get-issue-types-by-project project))))))
+             (summary . ,(format "%s%s" summary
+                                 (if (and (boundp 'parent-id) parent-id)
+                                     (format " (subtask of [jira:%s])" parent-id)
+                                   "")))
+             (description . ,description)
+             (priority (id . ,priority))
+             ;; accountId should be nil if Unassigned, not the key slot.
+             (assignee (name . ,(or (cdr (assoc user jira-users)) nil)))))))
+    ticket-struct))
+
+;;;###autoload
+(defun org-jira-create-issue-from-org ()
+  "Creates an issue from org."
+  (interactive)
+  (let* ((filename (org-jira-parse-issue-filename))
+         (org-issue-type (org-jira-get-issue-val-from-org 'type))
+         (org-issue-summary (org-jira-get-issue-val-from-org 'summary))
+         (org-issue-assignee (org-jira-get-issue-val-from-org 'assignee))
+         (assignee (list (cons 'name (jiralib-get-user-account-id filename org-issue-assignee))))
+         (org-issue-priority (org-jira-get-issue-val-from-org 'priority))
+         (org-issue-id (org-jira-get-issue-val-from-org 'ID))
+         (org-issue-description (org-trim (org-jira-get-issue-val-from-org 'description))))
+    ;; Creates the ticket
+    (let* ((parent-id nil)
+           (ticket-struct (org-jira-get-issue-struct-with-assignee filename org-issue-type org-issue-summary org-issue-description assignee org-issue-priority)))
+      (let ((created-id (cdr (assq 'key (jiralib-create-issue ticket-struct))))
+            (search-invisible t))
+        (beginning-of-buffer)
+        (replace-string (replace-regexp-in-string "-" "_" org-issue-id) (replace-regexp-in-string "-" "_" created-id))
+        (beginning-of-buffer)
+        (replace-string org-issue-id created-id)
+        (org-jira-update-issue)))))
+
 ;;;###autoload
 (defun org-jira-create-issue (project type summary description)
   "Create an issue in PROJECT, of type TYPE, with given SUMMARY and DESCRIPTION."
@@ -2154,20 +2212,22 @@ otherwise it should return:
 
       ;; Send the update to jira
       (let ((update-fields
-             (list (cons
-                    'components
-                    (or (org-jira-build-components-list
-                         project-components
-                         org-issue-components) []))
-                   (cons 'priority (org-jira-get-id-name-alist org-issue-priority
-                                                       (jiralib-get-priorities)))
-                   (cons 'description org-issue-description)
-                   (cons 'labels org-issue-labels)
-                   (cons 'assignee (list (cons 'name (jiralib-get-user-account-id project org-issue-assignee))))
-                   ;; (cons 'reporter (list (cons 'name (jiralib-get-user-account-id project org-issue-reporter))))
-                   (cons 'summary (org-jira-strip-priority-tags (org-jira-get-issue-val-from-org 'summary)))
-                   (cons 'issuetype `((id . ,org-issue-type-id)
-      (name . ,org-issue-type))))))
+             (append
+              (list (cons
+                     'components
+                     (or (org-jira-build-components-list
+                          project-components
+                          org-issue-components) []))
+                    (cons 'priority (org-jira-get-id-name-alist org-issue-priority
+                                                                (jiralib-get-priorities)))
+                    (cons 'description org-issue-description)
+                    (cons 'labels org-issue-labels)
+                    (cons 'assignee (list (cons 'name (jiralib-get-user-account-id project org-issue-assignee))))
+                    ;; (cons 'reporter (list (cons 'name (jiralib-get-user-account-id project org-issue-reporter))))
+                    (cons 'summary (org-jira-strip-priority-tags (org-jira-get-issue-val-from-org 'summary)))
+                    (cons 'issuetype `((id . ,org-issue-type-id)
+                                       (name . ,org-issue-type))))
+              (org-jira-get-custom-fields-to-update))))
 
         ;; If we enable duedate sync and we have a deadline present
         (when (and org-jira-deadline-duedate-sync-p
